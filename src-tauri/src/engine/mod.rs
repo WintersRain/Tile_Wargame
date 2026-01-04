@@ -9,7 +9,8 @@ pub mod dice;
 use crate::models::tile_model::{Building, BuildingType, Direction, Faction, Terrain, Tile, TileCoord};
 use crate::models::scout_model::{ScoutRoster, ScoutMode, ReportingMethod as ScoutReportingMethod};
 use crate::models::intel_model::{FactionDossier, IntelReport};
-use combat::{resolve_engagement, EngagementReport, UnitStats};
+use crate::models::military_model::{MilitaryUnit, MilitaryRoster, UnitTemplate, UnitAssignment};
+use combat::{resolve_engagement, EngagementReport};
 use scouting::{deploy_scout, recall_scout, process_scout_intelligence};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -324,8 +325,16 @@ pub fn get_map(state: State<AppState>) -> GameState {
 
 #[tauri::command]
 pub fn simulate_combat() -> EngagementReport {
-    let mut attacker = UnitStats {
+    // Create test units using the new MilitaryUnit structure
+    let mut attacker = MilitaryUnit {
+        id: 1,
         name: "Imperial Longbowmen".to_string(),
+        faction: "Human".to_string(),
+        template_id: "human_archer".to_string(),
+        current_strength: 100,
+        max_strength: 100,
+        experience: 0,
+        health: 5,
         melee: 5,
         accuracy: 45,
         armor: 5,
@@ -336,10 +345,21 @@ pub fn simulate_combat() -> EngagementReport {
         stealth: 10,
         range: 60,
         current_endurance: 100,
+        max_endurance: 500,
+        equipment: Vec::new(),
+        assignment: UnitAssignment::Recovering,
+        days_without_supply: 0,
     };
 
-    let mut defender = UnitStats {
+    let mut defender = MilitaryUnit {
+        id: 2,
         name: "Chaos Zealots".to_string(),
+        faction: "Chaos".to_string(),
+        template_id: "chaos_zealot".to_string(),
+        current_strength: 100,
+        max_strength: 100,
+        experience: 0,
+        health: 6,
         melee: 40,
         accuracy: 10,
         armor: 15,
@@ -350,6 +370,10 @@ pub fn simulate_combat() -> EngagementReport {
         stealth: 5,
         range: 10,
         current_endurance: 100,
+        max_endurance: 600,
+        equipment: Vec::new(),
+        assignment: UnitAssignment::Recovering,
+        days_without_supply: 0,
     };
 
     let terrain = Terrain::Plains;  // Default terrain for testing

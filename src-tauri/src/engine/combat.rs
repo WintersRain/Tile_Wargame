@@ -1,21 +1,7 @@
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use crate::models::tile_model::Terrain;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UnitStats {
-    pub name: String,
-    pub melee: i32,
-    pub accuracy: i32,
-    pub armor: i32,
-    pub penetration: i32,
-    pub morale: i32,
-    pub mobility: i32,
-    pub perception: i32,
-    pub stealth: i32,
-    pub range: i32,
-    pub current_endurance: i32,
-}
+use crate::models::military_model::MilitaryUnit;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum CombatOutcome {
@@ -34,8 +20,8 @@ pub struct EngagementReport {
 }
 
 pub fn resolve_engagement(
-    attacker: &mut UnitStats,
-    defender: &mut UnitStats,
+    attacker: &mut MilitaryUnit,
+    defender: &mut MilitaryUnit,
     terrain: &Terrain,
 ) -> EngagementReport {
     let mut rng = rand::thread_rng();
