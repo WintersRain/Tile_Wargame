@@ -52,6 +52,14 @@ impl ScoutRoster {
         }
     }
 
+    pub fn get_scout(&self, id: u32) -> Option<&ScoutUnit> {
+        self.scouts.iter().find(|s| s.id == id)
+    }
+
+    pub fn get_scout_mut(&mut self, id: u32) -> Option<&mut ScoutUnit> {
+        self.scouts.iter_mut().find(|s| s.id == id)
+    }
+
     pub fn create_scout(&mut self, name: String, stealth: i32, perception: i32, mobility: i32) -> u32 {
         let id = self.next_id;
         self.next_id += 1;

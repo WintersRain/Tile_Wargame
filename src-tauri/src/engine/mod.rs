@@ -3,6 +3,8 @@ pub mod combat;
 pub mod supply;
 pub mod detection;
 pub mod scouting;
+pub mod command;
+pub mod dice;
 
 use crate::models::tile_model::{Building, BuildingType, Direction, Faction, Terrain, Tile, TileCoord};
 use crate::models::scout_model::{ScoutRoster, ScoutMode, ReportingMethod as ScoutReportingMethod};
