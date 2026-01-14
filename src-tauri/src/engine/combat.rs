@@ -1,7 +1,7 @@
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use crate::models::tile_model::Terrain;
-use crate::models::military_model::MilitaryUnit;
+use crate::models::military_model::{MilitaryUnit, CombatMode};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum CombatOutcome {
@@ -136,6 +136,161 @@ pub fn resolve_engagement(
                 "{} failed to close. {} picks them off from afar. Damage: {}",
                 defender.name, attacker.name, damage
             ),
+        }
+    }
+}
+
+/// Resolve an ambush engagement with surprise attack mechanics
+/// Returns (engagement_report, should_continue_combat)
+///
+/// Ambushers in Guerilla mode strike then attempt to disengage.
+/// Ambushers in Raiding mode strike then commit to full combat.
+pub fn resolve_ambush(
+    ambusher: &mut MilitaryUnit,
+    victim: &mut MilitaryUnit,
+    ambush_mode: &CombatMode,
+    terrain: &Terrain,
+) -> (EngagementReport, bool) {
+    let mut rng = rand::thread_rng();
+
+    // 1. Surprise Check: ambusher's stealth vs victim's perception
+    let terrain_stealth = terrain.stealth_modifier();
+    let ambusher_stealth_effective = (ambusher.stealth as f32 * terrain_stealth) as i32;
+
+    let surprise_roll = rng.gen_range(0..100);
+    let surprise_threshold = ambusher_stealth_effective - victim.perception;
+    let surprise_success = surprise_roll < (50 + surprise_threshold);
+
+    if !surprise_success {
+        // Ambush detected! Victim sees it coming - reduce to standard engagement
+        return (
+            EngagementReport {
+                outcome: CombatOutcome::MeleeEngagement,
+                attacker_losses: 0,
+                defender_losses: 0,
+                message: format!(
+                    "{} detected the ambush by {}! Combat begins normally.",
+                    victim.name, ambusher.name
+                ),
+            },
+            true, // Continue to standard combat
+        );
+    }
+
+    // 2. FREE STRIKE: Ambusher attacks with no retaliation
+    let terrain_accuracy = terrain.accuracy_modifier();
+    let ambusher_accuracy_effective = (ambusher.accuracy as f32 * terrain_accuracy) as i32;
+
+    // Ambush gives bonus to hit - point-blank surprise attack
+    let ambush_bonus = 20;
+    let base_damage = if ambusher.range > 0 {
+        // Ranged ambush (archery, crossbows)
+        (ambusher_accuracy_effective + ambush_bonus - victim.armor).max(5) + rng.gen_range(5..15)
+    } else {
+        // Melee ambush (penetration reduces armor)
+        let effective_armor = (victim.armor - ambusher.penetration).max(0);
+        (ambusher.melee + ambush_bonus - effective_armor).max(8) + rng.gen_range(8..20)
+    };
+
+    // Critical hit chance on ambush (30%)
+    let crit_roll = rng.gen_range(0..100);
+    let final_damage = if crit_roll < 30 {
+        (base_damage as f32 * 1.5) as i32
+    } else {
+        base_damage
+    };
+
+    victim.current_endurance -= final_damage;
+    let ambush_losses = final_damage / 10;
+
+    // 3. Check if victim is eliminated by ambush
+    if victim.current_endurance <= 0 {
+        return (
+            EngagementReport {
+                outcome: CombatOutcome::Annihilation,
+                attacker_losses: 0,
+                defender_losses: 100,
+                message: format!(
+                    "AMBUSH! {} struck from hiding (dmg: {}). {} eliminated!",
+                    ambusher.name, final_damage, victim.name
+                ),
+            },
+            false, // No further combat needed
+        );
+    }
+
+    // 4. Mode-specific behavior
+    match ambush_mode {
+        CombatMode::Guerilla => {
+            // Guerilla: Strike and fade
+            let terrain_mobility = terrain.mobility_modifier();
+            let ambusher_mobility_effective = (ambusher.mobility as f32 * terrain_mobility) as i32;
+            let victim_mobility_effective = (victim.mobility as f32 * terrain_mobility) as i32;
+
+            let disengage_roll = rng.gen_range(0..100);
+            let disengage_threshold = 40 + (ambusher_mobility_effective - victim_mobility_effective);
+
+            if disengage_roll < disengage_threshold {
+                // Successful disengagement
+                (
+                    EngagementReport {
+                        outcome: CombatOutcome::Retreat,
+                        attacker_losses: 0,
+                        defender_losses: ambush_losses,
+                        message: format!(
+                            "GUERILLA AMBUSH! {} struck from hiding (dmg: {}), then melted away!",
+                            ambusher.name, final_damage
+                        ),
+                    },
+                    false, // No further combat - ambusher disengages
+                )
+            } else {
+                // Failed to disengage - victim closes in
+                (
+                    EngagementReport {
+                        outcome: CombatOutcome::MeleeEngagement,
+                        attacker_losses: 0,
+                        defender_losses: ambush_losses,
+                        message: format!(
+                            "AMBUSH! {} dealt {} damage, but {} closed in before escape!",
+                            ambusher.name, final_damage, victim.name
+                        ),
+                    },
+                    true, // Continue to melee combat
+                )
+            }
+        }
+
+        CombatMode::Raiding => {
+            // Raiding: Strike and commit to destruction
+            (
+                EngagementReport {
+                    outcome: CombatOutcome::MeleeEngagement,
+                    attacker_losses: 0,
+                    defender_losses: ambush_losses,
+                    message: format!(
+                        "RAIDING AMBUSH! {} struck from hiding (dmg: {}), now pressing the attack!",
+                        ambusher.name, final_damage
+                    ),
+                },
+                true, // Continue to full combat engagement
+            )
+        }
+
+        _ => {
+            // Default to standard combat for non-ambush modes
+            (
+                EngagementReport {
+                    outcome: CombatOutcome::MeleeEngagement,
+                    attacker_losses: 0,
+                    defender_losses: ambush_losses,
+                    message: format!(
+                        "Ambush by {} dealt {} damage.",
+                        ambusher.name, final_damage
+                    ),
+                },
+                true,
+            )
         }
     }
 }

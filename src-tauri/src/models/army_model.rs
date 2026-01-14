@@ -63,7 +63,7 @@ impl Army {
         } else {
             let total: i32 = self.unit_ids.iter()
                 .filter_map(|id| roster.get_unit(*id))
-                .map(|u| u.stats.perception)
+                .map(|u| u.perception)
                 .sum();
             total / self.unit_ids.len() as i32
         };
@@ -148,7 +148,7 @@ impl Army {
         // Movement speed is limited by slowest unit
         self.movement_speed = self.unit_ids.iter()
             .filter_map(|id| roster.get_unit(*id))
-            .map(|u| u.stats.mobility)
+            .map(|u| u.mobility)
             .min()
             .unwrap_or(0);
     }

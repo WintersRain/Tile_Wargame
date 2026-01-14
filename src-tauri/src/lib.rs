@@ -17,7 +17,15 @@ pub fn run() {
             engine::assign_scout,
             engine::recall_scout_cmd,
             engine::get_faction_intel,
-            engine::get_scout_roster
+            engine::get_scout_roster,
+            // Military commands
+            engine::get_military_roster,
+            engine::create_unit,
+            engine::assign_unit_garrison,
+            engine::assign_unit_detached,
+            engine::move_unit,
+            engine::attack_section,
+            engine::recruit_unit
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {

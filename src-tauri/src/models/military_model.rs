@@ -26,6 +26,26 @@ impl Default for CombatMode {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// REPORTING METHOD (for scouting/observation intel)
+// ═══════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ReportingMethod {
+    /// Must physically return home to report - no mid-mission intel
+    Return,
+    /// Can send messages via trained hawk - report every few turns
+    Hawk,
+    /// Instant mental/magical bond - real-time updates
+    MagicBond,
+}
+
+impl Default for ReportingMethod {
+    fn default() -> Self {
+        ReportingMethod::Return
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // UNIT TEMPLATE (defines what a unit type IS - race + role)
 // ═══════════════════════════════════════════════════════════════════
 
@@ -209,6 +229,10 @@ pub struct MilitaryUnit {
 
     // State
     pub days_without_supply: i32,
+
+    // Observation/Scouting state (used when in Detached Observation mode)
+    pub turns_observing: i32,
+    pub reporting_method: ReportingMethod,
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -318,6 +342,8 @@ impl MilitaryRoster {
             equipment: Vec::new(),
             assignment: UnitAssignment::Recovering,
             days_without_supply: 0,
+            turns_observing: 0,
+            reporting_method: ReportingMethod::default(),
         });
 
         Ok(id)

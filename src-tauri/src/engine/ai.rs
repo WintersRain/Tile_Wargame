@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use crate::models::tile_model::Direction;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AIPersonality {
@@ -22,6 +23,7 @@ pub struct AIAction {
     pub description: String,
     pub score: f32,
     pub location: (i32, i32),
+    pub target_section: Direction,
 }
 
 impl AIPersonality {
@@ -60,15 +62,16 @@ impl AIPersonality {
 
     pub fn evaluate_actions(
         &self,
-        available_actions: Vec<(AIObjective, f32, String, (i32, i32))>,
+        available_actions: Vec<(AIObjective, f32, String, (i32, i32), Direction)>,
     ) -> Vec<AIAction> {
         let mut scored_actions: Vec<AIAction> = available_actions
             .into_iter()
-            .map(|(obj, val, desc, loc)| AIAction {
+            .map(|(obj, val, desc, loc, dir)| AIAction {
                 objective: obj,
                 description: desc,
                 score: self.calculate_utility(obj, val),
                 location: loc,
+                target_section: dir,
             })
             .collect();
 

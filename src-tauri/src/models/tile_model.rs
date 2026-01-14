@@ -75,6 +75,7 @@ pub enum Faction {
 pub enum BuildingType {
     // Human Buildings
     Keep,
+    Barracks,       // Enables unit recruitment
     Forge,
     Granary,
     GuildHall,
@@ -82,13 +83,14 @@ pub enum BuildingType {
     LoggingCamp,
     Quarry,
     Watchtower,
+    Wall,           // +30% defense bonus
     HumanOutpost,
 
     // Lamia Buildings
     BroodHive,
     MoltingPit,
     VerminPit,
-    SpawningNest,
+    SpawningNest,   // Lamia equivalent of Barracks
     BonePile,
     AmbushBlinds,
     FloodHatchery,
