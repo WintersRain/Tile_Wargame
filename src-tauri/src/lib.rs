@@ -13,11 +13,7 @@ pub fn run() {
             engine::advance_turn,
             engine::add_task,
             engine::simulate_combat,
-            engine::create_scout,
-            engine::assign_scout,
-            engine::recall_scout_cmd,
             engine::get_faction_intel,
-            engine::get_scout_roster,
             // Military commands
             engine::get_military_roster,
             engine::create_unit,

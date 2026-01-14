@@ -120,7 +120,7 @@ impl FactionDossier {
         let key = format!("({}, {})", coord.x, coord.y);
 
         // Get or create TileIntel
-        let tile_intel = self.tiles.entry(key).or_insert_with(|| TileIntel {
+        let tile_intel = self.tiles.entry(key.clone()).or_insert_with(|| TileIntel {
             coord,
             sections: HashMap::new(),
             overall_threat_level: ThreatLevel::Unknown,

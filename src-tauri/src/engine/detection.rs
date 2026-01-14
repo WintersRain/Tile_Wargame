@@ -1,20 +1,21 @@
 use crate::models::tile_model::{Direction, Section, Terrain, TileCoord};
-use crate::models::scout_model::{ScoutMode, ScoutUnit};
+use crate::models::military_model::{CombatMode, MilitaryUnit, UnitAssignment};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DetectionResult {
     Undetected,
-    Detected { scout_id: u32, location: (TileCoord, Direction) },
-    Captured { scout_id: u32, location: (TileCoord, Direction) },
+    Detected { unit_id: u32, location: (TileCoord, Direction) },
+    Captured { unit_id: u32, location: (TileCoord, Direction) },
 }
 
-/// Calculate detection probability for a scout in a section
+/// Calculate detection probability for a unit operating in detached mode
 pub fn calculate_detection_probability(
-    scout: &ScoutUnit,
+    unit: &MilitaryUnit,
     section: &Section,
     patrols_in_section: i32,
+    mode: &CombatMode,
 ) -> f32 {
     // Base detection chance from patrol density (0-40%)
     let patrol_density = (patrols_in_section as f32 * 10.0).min(40.0);
@@ -34,20 +35,23 @@ pub fn calculate_detection_probability(
     // Effective defender perception
     let defender_perception = patrol_density + watchtower_bonus;
 
-    // Scout stealth reduces detection
-    let stealth_reduction = scout.stealth as f32 * 0.5; // 50 stealth = -25% detection
+    // Unit stealth reduces detection
+    let stealth_reduction = unit.stealth as f32 * 0.5; // 50 stealth = -25% detection
 
-    // Mode modifier
-    let mode_modifier = match scout.mode {
-        ScoutMode::Observe => 0.0,  // No additional risk
-        ScoutMode::Probe => 15.0,   // +15% detection risk
+    // Mode modifier - more aggressive modes increase detection risk
+    let mode_modifier = match mode {
+        CombatMode::None => 0.0,         // Not applicable
+        CombatMode::Observation => 0.0,  // No additional risk - passive observation
+        CombatMode::Sniping => 15.0,     // +15% detection risk - engaging from distance
+        CombatMode::Guerilla => 20.0,    // +20% detection risk - close ambush activity
+        CombatMode::Raiding => 25.0,     // +25% detection risk - aggressive raiding
     };
 
     // Terrain modifier
     let terrain_modifier = match section.terrain {
         Terrain::Plains => 0.0,
         Terrain::Forest => -10.0,   // Forests provide cover
-        Terrain::Mountains => -5.0, // Mountains provide some cover
+        Terrain::Mountain => -5.0, // Mountains provide some cover
         Terrain::Swamp => 5.0,      // Swamps are harder to navigate stealthily
         Terrain::Desert => 5.0,     // Deserts offer little cover
     };
@@ -57,18 +61,24 @@ pub fn calculate_detection_probability(
     probability.max(0.0).min(95.0)
 }
 
-/// Roll for detection of a deployed scout
-pub fn roll_detection(scout: &ScoutUnit, section: &Section, patrols_in_section: i32) -> DetectionResult {
+/// Roll for detection of a deployed military unit in detached mode
+pub fn roll_detection(
+    unit: &MilitaryUnit,
+    section: &Section,
+    patrols_in_section: i32,
+    location: (TileCoord, Direction),
+    mode: &CombatMode,
+) -> DetectionResult {
     let mut rng = rand::thread_rng();
-    let detection_chance = calculate_detection_probability(scout, section, patrols_in_section);
+    let detection_chance = calculate_detection_probability(unit, section, patrols_in_section, mode);
 
     let roll = rng.gen_range(0.0..100.0);
 
     if roll < detection_chance {
         // Detected! Now roll for capture (perception gap determines capture chance)
-        let capture_threshold = if scout.perception > 50 {
-            // High-perception scouts are harder to capture (they spot the trap)
-            20.0 - ((scout.perception as f32 - 50.0) * 0.3)
+        let capture_threshold = if unit.perception > 50 {
+            // High-perception units are harder to capture (they spot the trap)
+            20.0 - ((unit.perception as f32 - 50.0) * 0.3)
         } else {
             20.0
         };
@@ -76,13 +86,13 @@ pub fn roll_detection(scout: &ScoutUnit, section: &Section, patrols_in_section: 
         let capture_roll = rng.gen_range(0.0..100.0);
         if capture_roll < capture_threshold {
             DetectionResult::Captured {
-                scout_id: scout.id,
-                location: scout.assigned_location.unwrap(),
+                unit_id: unit.id,
+                location,
             }
         } else {
             DetectionResult::Detected {
-                scout_id: scout.id,
-                location: scout.assigned_location.unwrap(),
+                unit_id: unit.id,
+                location,
             }
         }
     } else {
@@ -90,23 +100,21 @@ pub fn roll_detection(scout: &ScoutUnit, section: &Section, patrols_in_section: 
     }
 }
 
-/// Process detection rolls for all deployed scouts in a faction
-pub fn process_scout_detection(
-    scouts: &[ScoutUnit],
+/// Process detection rolls for all detached units in a faction
+pub fn process_unit_detection(
+    units: &[MilitaryUnit],
     get_section: impl Fn(&TileCoord, &Direction) -> Option<Section>,
     get_patrol_count: impl Fn(&TileCoord, &Direction) -> i32,
 ) -> Vec<DetectionResult> {
     let mut results = Vec::new();
 
-    for scout in scouts {
-        if !scout.is_deployed {
-            continue;
-        }
-
-        if let Some((coord, dir)) = scout.assigned_location {
-            if let Some(section) = get_section(&coord, &dir) {
-                let patrol_count = get_patrol_count(&coord, &dir);
-                let result = roll_detection(scout, &section, patrol_count);
+    for unit in units {
+        // Only process units in Detached assignment
+        if let UnitAssignment::Detached { location, mode } = &unit.assignment {
+            let (coord, dir) = location;
+            if let Some(section) = get_section(coord, dir) {
+                let patrol_count = get_patrol_count(coord, dir);
+                let result = roll_detection(unit, &section, patrol_count, *location, mode);
 
                 if !matches!(result, DetectionResult::Undetected) {
                     results.push(result);
@@ -122,22 +130,37 @@ pub fn process_scout_detection(
 mod tests {
     use super::*;
     use crate::models::tile_model::{Building, BuildingType};
-    use crate::models::scout_model::ReportingMethod;
+    use crate::models::military_model::ReportingMethod;
 
-    fn create_test_scout(stealth: i32, perception: i32, mode: ScoutMode) -> ScoutUnit {
-        ScoutUnit {
+    fn create_test_unit(stealth: i32, perception: i32, mode: CombatMode) -> MilitaryUnit {
+        MilitaryUnit {
             id: 1,
-            name: "Test Scout".to_string(),
+            name: "Test Unit".to_string(),
             faction: "Test".to_string(),
-            stealth,
-            perception,
+            template_id: "test_template".to_string(),
+            current_strength: 10,
+            max_strength: 10,
+            experience: 0,
+            health: 5,
+            melee: 30,
+            accuracy: 20,
+            armor: 15,
+            penetration: 5,
+            morale: 50,
             mobility: 20,
-            assigned_location: Some((TileCoord { x: 0, y: 0 }, Direction::N)),
-            mode,
-            reporting_method: ReportingMethod::Return,
-            is_deployed: true,
+            perception,
+            stealth,
+            range: 0,
+            current_endurance: 50,
+            max_endurance: 50,
+            equipment: Vec::new(),
+            assignment: UnitAssignment::Detached {
+                location: (TileCoord { x: 0, y: 0 }, Direction::N),
+                mode: mode.clone(),
+            },
+            days_without_supply: 0,
             turns_observing: 0,
-            has_returned: false,
+            reporting_method: ReportingMethod::Return,
         }
     }
 
@@ -164,60 +187,94 @@ mod tests {
 
     #[test]
     fn test_base_detection_probability() {
-        let scout = create_test_scout(0, 0, ScoutMode::Observe);
+        let unit = create_test_unit(0, 0, CombatMode::Observation);
         let section = create_test_section(Terrain::Plains, false);
 
         // 0 patrols = 0% base
-        assert_eq!(calculate_detection_probability(&scout, &section, 0), 0.0);
+        assert_eq!(calculate_detection_probability(&unit, &section, 0, &CombatMode::Observation), 0.0);
 
         // 1 patrol = 10% base
-        assert_eq!(calculate_detection_probability(&scout, &section, 1), 10.0);
+        assert_eq!(calculate_detection_probability(&unit, &section, 1, &CombatMode::Observation), 10.0);
 
         // 5+ patrols = 40% base (capped)
-        assert_eq!(calculate_detection_probability(&scout, &section, 5), 40.0);
+        assert_eq!(calculate_detection_probability(&unit, &section, 5, &CombatMode::Observation), 40.0);
     }
 
     #[test]
     fn test_stealth_reduction() {
-        let scout = create_test_scout(50, 0, ScoutMode::Observe);
+        let unit = create_test_unit(50, 0, CombatMode::Observation);
         let section = create_test_section(Terrain::Plains, false);
 
         // 50 stealth = -25% detection
         // 1 patrol (10%) - 25% = 0% (clamped)
-        assert_eq!(calculate_detection_probability(&scout, &section, 1), 0.0);
+        assert_eq!(calculate_detection_probability(&unit, &section, 1, &CombatMode::Observation), 0.0);
 
         // 5 patrols (40%) - 25% = 15%
-        assert_eq!(calculate_detection_probability(&scout, &section, 5), 15.0);
+        assert_eq!(calculate_detection_probability(&unit, &section, 5, &CombatMode::Observation), 15.0);
     }
 
     #[test]
     fn test_watchtower_bonus() {
-        let scout = create_test_scout(0, 0, ScoutMode::Observe);
+        let unit = create_test_unit(0, 0, CombatMode::Observation);
         let section = create_test_section(Terrain::Plains, true);
 
         // 1 patrol (10%) + watchtower (20%) = 30%
-        assert_eq!(calculate_detection_probability(&scout, &section, 1), 30.0);
+        assert_eq!(calculate_detection_probability(&unit, &section, 1, &CombatMode::Observation), 30.0);
     }
 
     #[test]
     fn test_terrain_modifiers() {
-        let scout = create_test_scout(0, 0, ScoutMode::Observe);
+        let unit = create_test_unit(0, 0, CombatMode::Observation);
 
         // Forest: -10%
         let forest = create_test_section(Terrain::Forest, false);
-        assert_eq!(calculate_detection_probability(&scout, &forest, 1), 0.0); // 10% - 10% = 0%
+        assert_eq!(calculate_detection_probability(&unit, &forest, 1, &CombatMode::Observation), 0.0);
 
         // Swamp: +5%
         let swamp = create_test_section(Terrain::Swamp, false);
-        assert_eq!(calculate_detection_probability(&scout, &swamp, 1), 15.0); // 10% + 5% = 15%
+        assert_eq!(calculate_detection_probability(&unit, &swamp, 1, &CombatMode::Observation), 15.0);
     }
 
     #[test]
-    fn test_probe_mode_risk() {
-        let scout = create_test_scout(0, 0, ScoutMode::Probe);
+    fn test_combat_mode_risks() {
+        let unit = create_test_unit(0, 0, CombatMode::Observation);
         let section = create_test_section(Terrain::Plains, false);
 
-        // 1 patrol (10%) + probe mode (15%) = 25%
-        assert_eq!(calculate_detection_probability(&scout, &section, 1), 25.0);
+        // Observation: 1 patrol (10%) + 0% mode = 10%
+        assert_eq!(calculate_detection_probability(&unit, &section, 1, &CombatMode::Observation), 10.0);
+
+        // Sniping: 1 patrol (10%) + 15% mode = 25%
+        assert_eq!(calculate_detection_probability(&unit, &section, 1, &CombatMode::Sniping), 25.0);
+
+        // Guerilla: 1 patrol (10%) + 20% mode = 30%
+        assert_eq!(calculate_detection_probability(&unit, &section, 1, &CombatMode::Guerilla), 30.0);
+
+        // Raiding: 1 patrol (10%) + 25% mode = 35%
+        assert_eq!(calculate_detection_probability(&unit, &section, 1, &CombatMode::Raiding), 35.0);
+    }
+
+    #[test]
+    fn test_process_unit_detection_only_detached() {
+        let detached_unit = create_test_unit(0, 0, CombatMode::Observation);
+
+        let mut garrison_unit = create_test_unit(0, 0, CombatMode::Observation);
+        garrison_unit.id = 2;
+        garrison_unit.assignment = UnitAssignment::Garrison {
+            location: (TileCoord { x: 0, y: 0 }, Direction::N),
+            is_stationed: true,
+        };
+
+        let units = vec![detached_unit, garrison_unit];
+
+        let get_section = |_coord: &TileCoord, _dir: &Direction| {
+            Some(create_test_section(Terrain::Plains, false))
+        };
+
+        let get_patrol_count = |_coord: &TileCoord, _dir: &Direction| 0;
+
+        let results = process_unit_detection(&units, get_section, get_patrol_count);
+
+        // With 0 patrols and 0 stealth, detection chance is 0%, so no results expected
+        assert_eq!(results.len(), 0);
     }
 }

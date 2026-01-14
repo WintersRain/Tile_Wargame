@@ -7,12 +7,10 @@ pub mod command;
 pub mod dice;
 
 use crate::models::tile_model::{Building, BuildingType, Direction, Faction, Terrain, Tile, TileCoord};
-use crate::models::scout_model::{ScoutRoster, ScoutMode, ReportingMethod as ScoutReportingMethod};
-use crate::models::intel_model::{FactionDossier, IntelReport};
-use crate::models::military_model::{MilitaryUnit, MilitaryRoster, UnitTemplate, UnitAssignment, CombatMode};
+use crate::models::intel_model::FactionDossier;
+use crate::models::military_model::{MilitaryUnit, MilitaryRoster, UnitTemplate, UnitAssignment, CombatMode, ReportingMethod};
 use combat::{resolve_engagement, resolve_ambush, EngagementReport};
-use crate::models::tile_model::Section;
-use scouting::{deploy_scout, recall_scout, process_scout_intelligence};
+use scouting::process_observation_intelligence;
 use ai::{AIPersonality, AIObjective, AIAction};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -240,7 +238,6 @@ pub struct GameState {
     pub current_day: i32,
     pub task_queue: Vec<Task>,
     pub player_faction: Faction,
-    pub scout_rosters: HashMap<String, ScoutRoster>,
     pub faction_dossiers: HashMap<String, FactionDossier>,
     pub military_rosters: HashMap<String, MilitaryRoster>,
 }
@@ -343,12 +340,7 @@ impl GameState {
             }
         }
 
-        // 5. Initialize scout rosters for each faction
-        let mut scout_rosters = HashMap::new();
-        scout_rosters.insert("Player".to_string(), ScoutRoster::new("Player".to_string()));
-        scout_rosters.insert("Hive Prime".to_string(), ScoutRoster::new("Hive Prime".to_string()));
-
-        // 6. Initialize faction dossiers (each faction tracks intel on others)
+        // 5. Initialize faction dossiers (each faction tracks intel on others)
         let mut faction_dossiers = HashMap::new();
         faction_dossiers.insert(
             "Player".to_string(),
@@ -405,7 +397,6 @@ impl GameState {
             current_day: 1,
             task_queue: Vec::new(),
             player_faction: p_faction,
-            scout_rosters,
             faction_dossiers,
             military_rosters,
         }
@@ -476,34 +467,37 @@ impl GameState {
             }
         }
 
-        // 3. Process scout intelligence gathering
-        let factions: Vec<String> = self.scout_rosters.keys().cloned().collect();
-        for faction in factions {
-            if let Some(roster) = self.scout_rosters.get_mut(&faction) {
-                if let Some(dossier) = self.faction_dossiers.get_mut(&faction) {
-                    let get_section = |coord: &TileCoord, dir: &Direction| {
-                        let key = format!("({}, {})", coord.x, coord.y);
-                        self.map.get(&key)?.sections.get(dir).cloned()
-                    };
+        // 3. Process observation intelligence from military units in Observation mode
+        let factions: Vec<String> = self.military_rosters.keys().cloned().collect();
+        for faction in factions.iter() {
+            // Need to get units and dossier separately due to borrow checker
+            let map_clone = self.map.clone();
+            let get_section = |coord: &TileCoord, dir: &Direction| {
+                let key = format!("({}, {})", coord.x, coord.y);
+                map_clone.get(&key)?.sections.get(dir).cloned()
+            };
 
-                    let reports = process_scout_intelligence(
-                        &mut roster.scouts,
-                        get_section,
-                        dossier,
-                        self.current_week,
-                        self.current_day,
+            if let (Some(roster), Some(dossier)) = (
+                self.military_rosters.get_mut(faction),
+                self.faction_dossiers.get_mut(faction),
+            ) {
+                let reports = process_observation_intelligence(
+                    &mut roster.units,
+                    get_section,
+                    dossier,
+                    self.current_week,
+                    self.current_day,
+                );
+
+                for report in reports {
+                    println!(
+                        "INTEL: Unit {} from {} reported on ({}, {}) {:?}",
+                        report.scout_id,
+                        faction,
+                        report.location.0.x,
+                        report.location.0.y,
+                        report.location.1
                     );
-
-                    for report in reports {
-                        println!(
-                            "INTEL: Scout {} from {} reported on ({}, {}) {:?}",
-                            report.scout_id,
-                            faction,
-                            report.location.0.x,
-                            report.location.0.y,
-                            report.location.1
-                        );
-                    }
                 }
             }
         }
@@ -840,7 +834,6 @@ pub fn advance_turn(state: State<AppState>) -> GameState {
         current_day: game.current_day,
         task_queue: game.task_queue.clone(),
         player_faction: game.player_faction,
-        scout_rosters: game.scout_rosters.clone(),
         faction_dossiers: game.faction_dossiers.clone(),
         military_rosters: game.military_rosters.clone(),
     }
@@ -870,7 +863,6 @@ pub fn add_task(
         current_day: game.current_day,
         task_queue: game.task_queue.clone(),
         player_faction: game.player_faction,
-        scout_rosters: game.scout_rosters.clone(),
         faction_dossiers: game.faction_dossiers.clone(),
         military_rosters: game.military_rosters.clone(),
     }
@@ -885,7 +877,6 @@ pub fn get_map(state: State<AppState>) -> GameState {
         current_day: game.current_day,
         task_queue: game.task_queue.clone(),
         player_faction: game.player_faction,
-        scout_rosters: game.scout_rosters.clone(),
         faction_dossiers: game.faction_dossiers.clone(),
         military_rosters: game.military_rosters.clone(),
     }
@@ -917,6 +908,8 @@ pub fn simulate_combat() -> EngagementReport {
         equipment: Vec::new(),
         assignment: UnitAssignment::Recovering,
         days_without_supply: 0,
+        turns_observing: 0,
+        reporting_method: ReportingMethod::Return,
     };
 
     let mut defender = MilitaryUnit {
@@ -942,125 +935,12 @@ pub fn simulate_combat() -> EngagementReport {
         equipment: Vec::new(),
         assignment: UnitAssignment::Recovering,
         days_without_supply: 0,
+        turns_observing: 0,
+        reporting_method: ReportingMethod::Return,
     };
 
     let terrain = Terrain::Plains;  // Default terrain for testing
     resolve_engagement(&mut attacker, &mut defender, &terrain)
-}
-
-// ========== Scout Commands ==========
-
-#[tauri::command]
-pub fn create_scout(
-    state: State<AppState>,
-    faction: String,
-    name: String,
-    stealth: i32,
-    perception: i32,
-    mobility: i32,
-) -> Result<u32, String> {
-    let mut game = state.0.lock().unwrap();
-
-    if let Some(roster) = game.scout_rosters.get_mut(&faction) {
-        let id = roster.create_scout(name, stealth, perception, mobility);
-        Ok(id)
-    } else {
-        Err(format!("Faction '{}' not found", faction))
-    }
-}
-
-#[tauri::command]
-pub fn assign_scout(
-    state: State<AppState>,
-    faction: String,
-    scout_id: u32,
-    target_x: i32,
-    target_y: i32,
-    target_section: Direction,
-    mode: String,
-) -> Result<GameState, String> {
-    let mut game = state.0.lock().unwrap();
-
-    // Parse mode
-    let scout_mode = match mode.as_str() {
-        "observe" => ScoutMode::Observe,
-        "probe" => ScoutMode::Probe,
-        _ => return Err(format!("Invalid scout mode: {}", mode)),
-    };
-
-    // Get scout roster
-    let roster = game.scout_rosters.get_mut(&faction)
-        .ok_or_else(|| format!("Faction '{}' not found", faction))?;
-
-    // Find scout
-    let scout = roster.scouts.iter_mut()
-        .find(|s| s.id == scout_id)
-        .ok_or_else(|| format!("Scout {} not found", scout_id))?;
-
-    // Update mode
-    scout.mode = scout_mode;
-
-    // Deploy scout
-    let target_coord = TileCoord { x: target_x, y: target_y };
-    deploy_scout(scout, (target_coord, target_section))?;
-
-    Ok(GameState {
-        map: game.map.clone(),
-        current_week: game.current_week,
-        current_day: game.current_day,
-        task_queue: game.task_queue.clone(),
-        player_faction: game.player_faction,
-        scout_rosters: game.scout_rosters.clone(),
-        faction_dossiers: game.faction_dossiers.clone(),
-        military_rosters: game.military_rosters.clone(),
-    })
-}
-
-#[tauri::command]
-pub fn recall_scout_cmd(
-    state: State<AppState>,
-    faction: String,
-    scout_id: u32,
-) -> Result<GameState, String> {
-    let mut game = state.0.lock().unwrap();
-
-    // Get scout roster
-    let roster = game.scout_rosters.get_mut(&faction)
-        .ok_or_else(|| format!("Faction '{}' not found", faction))?;
-
-    // Find scout
-    let scout = roster.scouts.iter_mut()
-        .find(|s| s.id == scout_id)
-        .ok_or_else(|| format!("Scout {} not found", scout_id))?;
-
-    // Get dossier
-    let dossier = game.faction_dossiers.get_mut(&faction)
-        .ok_or_else(|| format!("Dossier for faction '{}' not found", faction))?;
-
-    // Recall scout (generates final report)
-    let get_section = |coord: &TileCoord, dir: &Direction| {
-        let key = format!("({}, {})", coord.x, coord.y);
-        game.map.get(&key)?.sections.get(dir).cloned()
-    };
-
-    recall_scout(
-        scout,
-        get_section,
-        dossier,
-        game.current_week,
-        game.current_day,
-    );
-
-    Ok(GameState {
-        map: game.map.clone(),
-        current_week: game.current_week,
-        current_day: game.current_day,
-        task_queue: game.task_queue.clone(),
-        player_faction: game.player_faction,
-        scout_rosters: game.scout_rosters.clone(),
-        faction_dossiers: game.faction_dossiers.clone(),
-        military_rosters: game.military_rosters.clone(),
-    })
 }
 
 #[tauri::command]
@@ -1073,18 +953,6 @@ pub fn get_faction_intel(
     game.faction_dossiers.get(&faction)
         .cloned()
         .ok_or_else(|| format!("Dossier for faction '{}' not found", faction))
-}
-
-#[tauri::command]
-pub fn get_scout_roster(
-    state: State<AppState>,
-    faction: String,
-) -> Result<ScoutRoster, String> {
-    let game = state.0.lock().unwrap();
-
-    game.scout_rosters.get(&faction)
-        .cloned()
-        .ok_or_else(|| format!("Scout roster for faction '{}' not found", faction))
 }
 
 // ========== Military Commands ==========
@@ -1146,7 +1014,6 @@ pub fn assign_unit_garrison(
         current_day: game.current_day,
         task_queue: game.task_queue.clone(),
         player_faction: game.player_faction,
-        scout_rosters: game.scout_rosters.clone(),
         faction_dossiers: game.faction_dossiers.clone(),
         military_rosters: game.military_rosters.clone(),
     })
@@ -1191,7 +1058,6 @@ pub fn assign_unit_detached(
         current_day: game.current_day,
         task_queue: game.task_queue.clone(),
         player_faction: game.player_faction,
-        scout_rosters: game.scout_rosters.clone(),
         faction_dossiers: game.faction_dossiers.clone(),
         military_rosters: game.military_rosters.clone(),
     })
@@ -1235,7 +1101,6 @@ pub fn move_unit(
         current_day: game.current_day,
         task_queue: game.task_queue.clone(),
         player_faction: game.player_faction,
-        scout_rosters: game.scout_rosters.clone(),
         faction_dossiers: game.faction_dossiers.clone(),
         military_rosters: game.military_rosters.clone(),
     })
@@ -1273,6 +1138,10 @@ pub fn attack_section(
                 UnitAssignment::Detached { location, .. } => *location,
                 UnitAssignment::Ambush(coord, dir) => (*coord, *dir),
                 UnitAssignment::Moving { from, .. } => *from,
+                UnitAssignment::Patrol { route, current_index } => {
+                    if route.is_empty() { continue; }
+                    route[*current_index]
+                },
                 UnitAssignment::Attached(_) => continue, // Can't move attached units directly
                 UnitAssignment::Recovering => continue, // Can't move recovering units
             };
@@ -1307,7 +1176,6 @@ pub fn attack_section(
         current_day: game.current_day,
         task_queue: game.task_queue.clone(),
         player_faction: game.player_faction,
-        scout_rosters: game.scout_rosters.clone(),
         faction_dossiers: game.faction_dossiers.clone(),
         military_rosters: game.military_rosters.clone(),
     })
@@ -1374,7 +1242,6 @@ pub fn recruit_unit(
         current_day: game.current_day,
         task_queue: game.task_queue.clone(),
         player_faction: game.player_faction,
-        scout_rosters: game.scout_rosters.clone(),
         faction_dossiers: game.faction_dossiers.clone(),
         military_rosters: game.military_rosters.clone(),
     })

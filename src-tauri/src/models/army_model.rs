@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 use super::tile_model::{Direction, TileCoord};
 use super::military_model::MilitaryRoster;
 use super::commander_model::CommanderRoster;
-use super::scout_model::ScoutRoster;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ArmyMission {
@@ -80,12 +79,12 @@ impl Army {
         (base_scouting + commander_bonus).clamp(0, 40)
     }
 
-    /// ENHANCED scouting from attached scouts (stacks with inherent)
+    /// ENHANCED scouting from attached observer units (stacks with inherent)
+    /// Observer units are MilitaryUnits in Observation mode
     pub fn total_scouting(
         &self,
         military_roster: &MilitaryRoster,
         commanders: &CommanderRoster,
-        scout_roster: &ScoutRoster,
     ) -> i32 {
         let inherent = self.inherent_scouting(military_roster, commanders);
 
@@ -93,15 +92,15 @@ impl Army {
             return inherent;
         }
 
-        // Attached scouts add their perception (best scout matters most)
-        let best_scout_perception: i32 = self.attached_scout_ids.iter()
-            .filter_map(|id| scout_roster.get_scout(*id))
-            .map(|s| s.perception)
+        // Attached observer units add their perception (best observer matters most)
+        let best_observer_perception: i32 = self.attached_scout_ids.iter()
+            .filter_map(|id| military_roster.get_unit(*id))
+            .map(|u| u.perception)
             .max()
             .unwrap_or(0);
 
-        // Inherent + attached (no cap on total with scouts)
-        inherent + best_scout_perception
+        // Inherent + attached (no cap on total with observers)
+        inherent + best_observer_perception
     }
 
     /// Attach a scout to this army
